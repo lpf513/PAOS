@@ -1,19 +1,30 @@
 import asyncio
+import os
+import tempfile
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.sandbox_executor import execute_in_sandbox
 from app.db.session import AsyncSessionLocal
-from app.models import DAGTaskNode, TaskStatus
+from app.models import DAGTaskNode, ExperienceLedger, IdentityGraph, Project, TaskStatus
 from app.services.arbitration_engine import negotiate_for_project
+from app.services.asset_parser import AssetParserError, parse_document_to_json
+from app.services.llm_client import llm_client
 from app.services.llm_gateway import chat_with_memory
 
 
 _running_projects: set[int] = set()
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    raw_content: str = Field(..., min_length=1)
+    objective: str = "提取该项目的业务硬性约束、软性约束和结构化业务数据。"
 
 
 def _dependencies_completed(node: DAGTaskNode, completed_node_ids: set[int]) -> bool:
@@ -64,16 +75,46 @@ async def _update_node_status(node_id: int, status: TaskStatus) -> None:
         await session.commit()
 
 
+async def _complete_node_with_output(node_id: int, output_data: str) -> None:
+    async with AsyncSessionLocal() as session:
+        node = await session.get(DAGTaskNode, node_id)
+        if node is None:
+            raise RuntimeError(f"DAG task node {node_id} no longer exists.")
+
+        node.output_data = output_data
+        node.status = TaskStatus.COMPLETED
+        await session.commit()
+
+
+async def _record_node_experience(project_id: int, task_name: str, final_result: str) -> None:
+    """Persist successful node output so future agents can retrieve it as memory."""
+
+    embedding = await llm_client.embed(task_name)
+
+    async with AsyncSessionLocal() as session:
+        session.add(
+            ExperienceLedger(
+                project_id=project_id,
+                scenario_summary=task_name,
+                embedding=embedding,
+                reflection_result=final_result,
+                success_score=1.0,
+            )
+        )
+        await session.commit()
+
+
 async def _execute_node(project_id: int, node: DAGTaskNode) -> None:
     await _update_node_status(node.id, TaskStatus.RUNNING)
 
     try:
         role = node.assigned_agent_role or "通用 PAOS Agent"
+        final_result = ""
 
         if _requires_arbitration(role):
             # Convention: arbitration roles can be written as "产品策略|研发合规".
             agent_a_role, _, agent_b_role = role.partition("|")
-            await negotiate_for_project(
+            final_result = await negotiate_for_project(
                 project_id=project_id,
                 task_desc=node.task_name,
                 agent_a_role=agent_a_role or "Agent A",
@@ -94,11 +135,13 @@ async def _execute_node(project_id: int, node: DAGTaskNode) -> None:
                     "Sandbox execution failed: "
                     f"{sandbox_result['stderr'] or sandbox_result['stdout']}"
                 )
+            final_result = sandbox_result["stdout"] or "Sandbox execution completed successfully."
         else:
             context = f"请以 {role} 的身份完成该 DAG 节点任务，并输出可执行结果。"
-            await chat_with_memory(project_id, node.task_name, context)
+            final_result = await chat_with_memory(project_id, node.task_name, context)
 
-        await _update_node_status(node.id, TaskStatus.COMPLETED)
+        await _record_node_experience(project_id, node.task_name, final_result)
+        await _complete_node_with_output(node.id, final_result)
     except Exception:
         await _update_node_status(node.id, TaskStatus.BLOCKED)
         raise
@@ -144,6 +187,7 @@ def _node_to_status_dict(node: DAGTaskNode) -> dict[str, Any]:
         "status": node.status.value,
         "dependencies": node.dependencies or [],
         "assigned_agent_role": node.assigned_agent_role,
+        "output_data": node.output_data,
     }
 
 
@@ -171,6 +215,33 @@ def _build_status_tree(nodes: list[DAGTaskNode]) -> list[dict[str, Any]]:
     return roots
 
 
+async def _parse_raw_project_asset(request: ProjectCreateRequest) -> dict[str, Any]:
+    temp_file_path = ""
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".txt",
+            encoding="utf-8",
+            delete=False,
+        ) as temp_file:
+            temp_file.write(request.raw_content)
+            temp_file_path = temp_file.name
+
+        parsed_asset = await parse_document_to_json(temp_file_path, request.objective)
+        return {
+            "structured_data": parsed_asset.structured_data,
+            "hard_constraints": parsed_asset.hard_constraints,
+            "soft_constraints": parsed_asset.soft_constraints,
+        }
+    finally:
+        if temp_file_path:
+            try:
+                os.remove(temp_file_path)
+            except FileNotFoundError:
+                pass
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.PROJECT_NAME,
@@ -182,6 +253,32 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+@app.post("/api/projects/create")
+async def create_project(request: ProjectCreateRequest) -> dict[str, int]:
+    try:
+        parsed_payload = await _parse_raw_project_asset(request)
+    except AssetParserError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    async with AsyncSessionLocal() as session:
+        project = Project(name=request.name)
+        session.add(project)
+        await session.flush()
+
+        identity_graph = IdentityGraph(
+            project_id=project.id,
+            hard_constraints={
+                "items": parsed_payload["hard_constraints"],
+                "structured_data": parsed_payload["structured_data"],
+                "soft_constraints": parsed_payload["soft_constraints"],
+            },
+        )
+        session.add(identity_graph)
+        await session.commit()
+
+        return {"project_id": project.id}
 
 
 @app.post("/api/projects/{project_id}/start")

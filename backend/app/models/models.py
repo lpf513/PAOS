@@ -119,5 +119,6 @@ class DAGTaskNode(Base):
         comment="JSON array of prerequisite DAGTaskNode IDs.",
     )
     assigned_agent_role: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    output_data: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     project: Mapped[Project] = relationship(back_populates="dag_task_nodes")
