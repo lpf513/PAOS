@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,8 +15,8 @@ class Settings(BaseSettings):
         description="Async SQLAlchemy PostgreSQL connection string.",
     )
 
-    OPENAI_API_KEY: str | None = None
-    OPENAI_BASE_URL: str | None = None
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_BASE_URL: Optional[str] = None
     DEFAULT_LLM_MODEL: str = "gpt-4o-mini"
     DEFAULT_EMBEDDING_MODEL: str = "text-embedding-3-small"
 

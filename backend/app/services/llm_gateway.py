@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 
@@ -11,7 +11,7 @@ from app.services.llm_client import llm_client
 TOP_K_EXPERIENCES = 3
 
 
-def _format_hard_constraints(raw_constraints: dict[str, Any] | None) -> str:
+def _format_hard_constraints(raw_constraints: Optional[Dict[str, Any]]) -> str:
     """Convert stored JSON constraints into prompt-safe readable text."""
 
     if not raw_constraints:
@@ -19,7 +19,7 @@ def _format_hard_constraints(raw_constraints: dict[str, Any] | None) -> str:
     return json.dumps(raw_constraints, ensure_ascii=False, indent=2)
 
 
-def _format_reflections(reflections: list[str]) -> str:
+def _format_reflections(reflections: List[str]) -> str:
     """Merge retrieved experience reflections into a compact prompt section."""
 
     if not reflections:
@@ -38,7 +38,7 @@ async def _load_hard_constraints(project_id: int) -> str:
     return _format_hard_constraints(hard_constraints)
 
 
-async def _load_relevant_reflections(project_id: int, current_task: str) -> list[str]:
+async def _load_relevant_reflections(project_id: int, current_task: str) -> List[str]:
     task_embedding = await llm_client.embed(current_task)
     distance = ExperienceLedger.embedding.cosine_distance(task_embedding)
 

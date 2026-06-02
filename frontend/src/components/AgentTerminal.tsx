@@ -14,7 +14,11 @@ interface TerminalLog {
 
 function formatMessage(event: MessageEvent<string>): string {
   try {
-    return JSON.stringify(JSON.parse(event.data), null, 2);
+    const payload = JSON.parse(event.data) as { message?: unknown };
+    if (typeof payload.message === "string") {
+      return payload.message;
+    }
+    return JSON.stringify(payload, null, 2);
   } catch {
     return event.data;
   }

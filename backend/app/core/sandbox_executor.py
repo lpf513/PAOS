@@ -2,7 +2,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional, Tuple, Union
 
 import docker
 from docker.errors import DockerException, ImageNotFound, NotFound
@@ -15,13 +15,13 @@ CONTAINER_OUTPUT_DIR = "/sandbox/output"
 CONTAINER_SCRIPT_PATH = f"{CONTAINER_INPUT_DIR}/script.py"
 
 
-def _decode_logs(raw_logs: bytes | str) -> str:
+def _decode_logs(raw_logs: Union[bytes, str]) -> str:
     if isinstance(raw_logs, str):
         return raw_logs
     return raw_logs.decode("utf-8", errors="replace")
 
 
-def _collect_logs(container: Container) -> tuple[str, str]:
+def _collect_logs(container: Container) -> Tuple[str, str]:
     stdout = _decode_logs(container.logs(stdout=True, stderr=False))
     stderr = _decode_logs(container.logs(stdout=False, stderr=True))
     return stdout, stderr
@@ -33,7 +33,7 @@ def _wait_for_container(container: Container, timeout: int) -> int:
     while time.monotonic() < deadline:
         container.reload()
         if container.status == "exited":
-            state: dict[str, Any] = container.attrs.get("State", {})
+            state: Dict[str, Any] = container.attrs.get("State", {})
             exit_code = state.get("ExitCode")
             return int(exit_code) if exit_code is not None else -1
         time.sleep(0.1)
@@ -56,7 +56,7 @@ def execute_in_sandbox(script_content: str, timeout: int = 10) -> dict:
     if timeout < 1:
         raise ValueError("timeout must be greater than or equal to 1.")
 
-    container: Container | None = None
+    container: Optional[Container] = None
 
     with tempfile.TemporaryDirectory(prefix="paos_sandbox_") as temp_dir:
         base_dir = Path(temp_dir)

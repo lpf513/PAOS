@@ -1,7 +1,7 @@
 import csv
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -11,15 +11,15 @@ from app.services.llm_client import llm_client
 class ParsedAsset(BaseModel):
     """Normalized business constraints extracted from an uploaded/local asset."""
 
-    structured_data: dict[str, Any] = Field(
+    structured_data: Dict[str, Any] = Field(
         default_factory=dict,
         description="整理后的业务数据",
     )
-    hard_constraints: list[str] = Field(
+    hard_constraints: List[str] = Field(
         default_factory=list,
         description="绝对不能违反的硬性条件",
     )
-    soft_constraints: list[str] = Field(
+    soft_constraints: List[str] = Field(
         default_factory=list,
         description="建议参考的软性条件",
     )
@@ -45,13 +45,23 @@ def _read_local_asset(file_path: str) -> str:
     raise AssetParserError(f"Unsupported file type: {suffix}. Only .txt and .csv are supported.")
 
 
-def _extract_json_object(raw_text: str) -> dict[str, Any]:
+def _strip_markdown_fence(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[len("```json") :].strip()
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[len("```") :].strip()
+
+    if cleaned.endswith("```"):
+        cleaned = cleaned[: -len("```")].strip()
+
+    return cleaned
+
+
+def _extract_json_object(raw_text: str) -> Dict[str, Any]:
     """Parse a strict JSON object, tolerating accidental Markdown code fences."""
 
-    cleaned = raw_text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.removeprefix("```json").removeprefix("```").strip()
-        cleaned = cleaned.removesuffix("```").strip()
+    cleaned = _strip_markdown_fence(raw_text)
 
     try:
         parsed = json.loads(cleaned)
@@ -68,8 +78,8 @@ def _build_messages(
     *,
     document_content: str,
     objective: str,
-    previous_error: str | None = None,
-) -> list[dict[str, str]]:
+    previous_error: Optional[str] = None,
+) -> List[Dict[str, str]]:
     schema_hint = ParsedAsset.model_json_schema()
     correction = ""
     if previous_error:
@@ -113,7 +123,7 @@ async def parse_document_to_json(file_path: str, objective: str) -> ParsedAsset:
     """
 
     document_content = _read_local_asset(file_path)
-    last_error: str | None = None
+    last_error: Optional[str] = None
 
     for _attempt in range(3):
         messages = _build_messages(

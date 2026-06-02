@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -21,7 +21,7 @@ class ArbitrationReview(BaseModel):
     """Structured review response that Agent B must return as strict JSON."""
 
     is_approved: bool
-    bounding_boxes: list[str] = Field(
+    bounding_boxes: List[str] = Field(
         default_factory=list,
         description="If rejected, concrete modification boundaries Agent A must satisfy.",
     )
@@ -33,13 +33,23 @@ class ArbitrationReview(BaseModel):
         return self
 
 
-def _extract_json_object(raw_text: str) -> dict[str, Any]:
+def _strip_markdown_fence(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[len("```json") :].strip()
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[len("```") :].strip()
+
+    if cleaned.endswith("```"):
+        cleaned = cleaned[: -len("```")].strip()
+
+    return cleaned
+
+
+def _extract_json_object(raw_text: str) -> Dict[str, Any]:
     """Parse Agent B JSON, tolerating accidental Markdown code fences only."""
 
-    cleaned = raw_text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.removeprefix("```json").removeprefix("```").strip()
-        cleaned = cleaned.removesuffix("```").strip()
+    cleaned = _strip_markdown_fence(raw_text)
 
     try:
         payload = json.loads(cleaned)
@@ -59,7 +69,7 @@ def _parse_review(raw_text: str) -> ArbitrationReview:
         raise ArbitrationProtocolException("Agent B JSON does not match ArbitrationReview.") from exc
 
 
-def _format_bounding_boxes(bounding_boxes: list[str]) -> str:
+def _format_bounding_boxes(bounding_boxes: List[str]) -> str:
     if not bounding_boxes:
         return "暂无额外边界约束。"
     return "\n".join(f"{index}. {item}" for index, item in enumerate(bounding_boxes, start=1))
@@ -71,8 +81,8 @@ def _build_agent_a_task(
     agent_a_role: str,
     agent_b_role: str,
     loop_index: int,
-    bounding_boxes: list[str],
-) -> tuple[str, str]:
+    bounding_boxes: List[str],
+) -> Tuple[str, str]:
     current_task = f"{agent_a_role}生成第{loop_index}轮冲突解决方案"
     context = (
         f"业务任务：{task_desc}\n"
@@ -91,7 +101,7 @@ def _build_agent_b_task(
     proposal: str,
     agent_a_role: str,
     agent_b_role: str,
-) -> tuple[str, str]:
+) -> Tuple[str, str]:
     current_task = f"{agent_b_role}审核{agent_a_role}的冲突解决方案"
     review_schema = ArbitrationReview.model_json_schema()
     context = (
@@ -139,7 +149,7 @@ async def negotiate_for_project(
     if max_loops < 1:
         raise ValueError("max_loops must be greater than or equal to 1.")
 
-    bounding_boxes: list[str] = []
+    bounding_boxes: List[str] = []
     latest_proposal = ""
 
     for loop_index in range(1, max_loops + 1):

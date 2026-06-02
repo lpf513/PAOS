@@ -1,7 +1,8 @@
-from enum import StrEnum
+import enum
+from typing import Dict, Set
 
 
-class AgentState(StrEnum):
+class AgentState(str, enum.Enum):
     IDLE = "idle"
     PLANNING = "planning"
     RUNNING = "running"
@@ -15,7 +16,7 @@ class AgentStateMachine:
         self.state = AgentState.IDLE
 
     def transition_to(self, next_state: AgentState) -> AgentState:
-        allowed_transitions: dict[AgentState, set[AgentState]] = {
+        allowed_transitions: Dict[AgentState, Set[AgentState]] = {
             AgentState.IDLE: {AgentState.PLANNING, AgentState.RUNNING},
             AgentState.PLANNING: {AgentState.RUNNING, AgentState.WAITING, AgentState.FAILED},
             AgentState.RUNNING: {AgentState.WAITING, AgentState.COMPLETED, AgentState.FAILED},
